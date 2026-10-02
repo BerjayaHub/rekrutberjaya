@@ -214,7 +214,7 @@ function firstVal(vals, re){
 
 function buildCandidate(vals, n){
   const g = re => firstVal(vals, re);
-  const c = { n, vals };
+  const c = { n, row: n + 2, vals };   // row = nomor baris di spreadsheet (baris 1 = judul)
   c.time  = g(/^Timestamp/);
   c.name  = g(/^Nama Lengkap/) || '(tanpa nama)';
   c.wa    = g(/^Nomor WhatsApp/);
@@ -441,6 +441,16 @@ function showError(kind){
   host.append(h('div',{class:'state'},h('strong',null,msg[0]),msg[1]));
   $('#stamp').textContent = 'Gagal memuat';
 }
+// Link dari notifikasi Telegram: halaman#baris-12 langsung membuka detail pelamar di baris 12 spreadsheet.
+let hashDone = false;
+function openFromHash(){
+  if (hashDone) return;
+  hashDone = true;
+  const m = /^#baris-(\d+)$/.exec(location.hash);
+  if (!m) return;
+  const c = ROWS.find(x => x.row === +m[1]);
+  if (c) openDetail(c);
+}
 async function load(){
   $('#stamp').textContent = 'Memuat data…';
   $('#refresh').disabled = true;
@@ -451,6 +461,7 @@ async function load(){
     const t = new Date();
     $('#stamp').textContent = 'Diperbarui ' + t.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}).replace('.',':');
     renderAll();
+    openFromHash();
   }catch(err){
     showError(err && err.message);
   }finally{
