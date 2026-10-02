@@ -63,6 +63,13 @@ button{cursor:pointer}
 .card:active{background:var(--surface-2)}
 .card-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
 .card h2{margin:0;font-size:16px;font-weight:700;overflow-wrap:anywhere}
+.who{display:flex;gap:12px;align-items:center;min-width:0}
+.avatar{flex:none;width:48px;height:48px;border-radius:50%;overflow:hidden;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:800;font-size:17px}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.photo{display:block;width:104px;height:104px;border-radius:16px;overflow:hidden;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:800;font-size:34px;text-decoration:none;border:1px solid var(--line)}
+.photo img{width:100%;height:100%;object-fit:cover;display:block}
+.hero-top{display:flex;gap:14px;align-items:center}
+.hero-top>div{min-width:0}
 .meta{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13px;color:var(--muted)}
 .pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap}
 .pill.pos{background:var(--accent-soft);color:var(--accent)}
@@ -205,6 +212,34 @@ function normalize(table){
   return out;
 }
 
+// ambil ID file Google Drive dari link (open?id=..., file/d/.../view, uc?id=...)
+function driveId(url){
+  const u = String(url || '').split(/[,\s]+/).find(x => /^https?:\/\//.test(x)) || '';
+  const m = /[?&]id=([\w-]+)/.exec(u) || /\/d\/([\w-]+)/.exec(u);
+  return m ? m[1] : '';
+}
+const photoSrc = (id, w) => 'https://drive.google.com/thumbnail?id=' + id + '&sz=w' + w;
+const photoAlt = (id, w) => 'https://lh3.googleusercontent.com/d/' + id + '=w' + w;
+// gambar dengan cadangan: thumbnail Drive -> lh3 -> inisial nama
+function photoEl(c, w, cls, asLink){
+  const initial = (c.name.trim()[0] || '?').toUpperCase();
+  const box = h(asLink && c.photoId ? 'a' : 'div', {class: cls}, initial);
+  if (asLink && c.photoId){
+    box.href = 'https://drive.google.com/file/d/' + c.photoId + '/view';
+    box.target = '_blank'; box.rel = 'noopener'; box.title = 'Buka foto ukuran penuh';
+  }
+  if (!c.photoId) return box;
+  const img = h('img', {src: photoSrc(c.photoId, w), alt: 'Foto ' + c.name, loading: 'lazy', referrerpolicy: 'no-referrer'});
+  let tried = 0;
+  img.addEventListener('error', () => {
+    if (tried++ === 0) img.src = photoAlt(c.photoId, w);
+    else { img.remove(); box.textContent = initial; }   // foto tidak bisa dimuat: tampilkan inisial
+  });
+  box.textContent = '';
+  box.append(img);
+  return box;
+}
+
 // find columns by label pattern, return the first non-empty value
 function colsMatching(re){ return COLS.filter(c => re.test(c.label)); }
 function firstVal(vals, re){
@@ -229,6 +264,7 @@ function buildCandidate(vals, n){
   c.working  = g(/masih bekerja\?/);
   c.cv   = g(/^Upload CV/);
   c.cert = g(/^Upload sertifikat/);
+  c.photoId = driveId(firstVal(vals, /foto/i));   // kolom "Tambahkan Foto terkini langsung dari Kamera"
   c.ts = parseTime(c.time) || n;
   c.checks = [
     { key:'exp',   label:'Pengalaman relevan min. 1 tahun', v:g(/pengalaman kerja yang relevan.*minimal 1 tahun/), want:'yes', short:'Pengalaman 1 th+' },
@@ -341,7 +377,7 @@ function card(c){
   const flags = c.checks.slice(0,5).map(k => h('span',{class:'pill ' + (k.ok?'ok':(k.known?'bad':'mut'))}, (k.ok?'✓ ':(k.known?'✕ ':'? ')) + k.short));
   return h('button',{class:'card',type:'button',onclick:()=>openDetail(c)},
     h('div',{class:'card-top'},
-      h('h2',null,c.name),
+      h('div',{class:'who'}, photoEl(c, 96, 'avatar'), h('h2',null,c.name)),
       c.pos ? h('span',{class:'pill pos'},c.pos) : null),
     h('div',{class:'meta'},
       c.dom ? h('span',null,'📍 ' + c.dom) : null,
@@ -367,7 +403,7 @@ function renderList(){
 function renderAll(){ renderChips(); renderPanel(); renderList(); }
 
 // ---------- detail ----------
-const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Posisi Yang Dilamar|Upload CV|Upload sertifikat|Pernyataan dan Persetujuan|Column \d+)/;
+const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Posisi Yang Dilamar|Upload CV|Upload sertifikat|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/;
 function openDetail(c, pushed){
   const host = $('#sheetHost'); host.replaceChildren();
   const wa = waLink(c.wa);
@@ -391,9 +427,12 @@ function openDetail(c, pushed){
       h('span',{class:'stamp'}, c.time ? 'Diisi ' + c.time : ''))),
     h('div',{class:'wrap sheet-body'},
       h('div',{class:'hero'},
-        h('h2',null,c.name),
-        h('div',null, c.pos ? h('span',{class:'pill pos'},c.pos) : null, ' ',
-          h('span',{class:'pill ' + (c.score>=5?'ok':c.score>=3?'warn':'bad')}, 'Syarat dasar ' + c.score + '/5')),
+        h('div',{class:'hero-top'},
+          photoEl(c, 320, 'photo', true),
+          h('div',null,
+            h('h2',null,c.name),
+            h('div',null, c.pos ? h('span',{class:'pill pos'},c.pos) : null, ' ',
+              h('span',{class:'pill ' + (c.score>=5?'ok':c.score>=3?'warn':'bad')}, 'Syarat dasar ' + c.score + '/5')))),
         h('div',{class:'meta'},
           c.dom ? h('span',null,'📍 ' + c.dom) : null,
           c.wa ? h('span',null,'WA ' + c.wa) : null,
