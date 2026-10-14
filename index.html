@@ -191,7 +191,7 @@ button{cursor:pointer}
 const SOURCES = [
   { key:'baris',   nama:'Chef & Waiter', id:"1XTu4WvQdqQrjq--urbJHFqLM39W0-GwFiisxY5LOyss", gid:"894288944",  posDefault:'',              profile:'resto' },
   { key:'digital', nama:'Digital Media', id:"1NxObPuSA33AxAhtbkladVG-SsKatgxnv70YtgbNtBOg", gid:"1685699540", posDefault:'DIGITAL MEDIA', profile:'digital' },
-  { key:'bengkel', nama:'Bengkel',       id:"1aH042xOl6G8e7SqUpyK9DxhwpjiQyUnxaxC6e4cSj1M", gid:"1549603677", posDefault:'BENGKEL',       profile:'bengkel' }
+  { key:'bengkel', nama:'Bengkel',       id:"1aH042xOl6G8e7SqUpyK9DxhwpjiQyUnxaxC6e4cSj1M", gid:"1549603677", posDefault:'',              profile:'bengkel' }
 ];
 /* ================================================================ */
 
@@ -330,10 +330,10 @@ function buildCandidate(cols, vals, n, src){
   c.dob   = g(/^Tanggal Lahir/i);
   c.outlet = g(/^Lokasi outlet/i);   // bisa lebih dari satu (dipisah koma)
   c.outletList = c.outlet ? c.outlet.split(/\s*,\s*/).filter(Boolean) : [];
-  c.pos   = g(/^Posisi Yang Dilamar/) || src.posDefault || 'BELUM PILIH POSISI';   // pelamar yang berhenti di pertanyaan dasar belum sempat memilih posisi
+  c.pos   = g(/^Posisi Yang (Dilamar|Anda ingin lamar)/i) || src.posDefault || 'BELUM PILIH POSISI';   // pelamar yang berhenti di pertanyaan dasar belum sempat memilih posisi
   c.expTotal = g(/^(Total pengalaman Anda (di bidang F&B|bekerja di kitchen)|Berapa lama pengalaman Anda bekerja di Bengkel)/i);
   c.lastPos  = g(/^Posisi terakhir/);
-  c.lastCo   = g(/^(Nama restoran|Sebutkan nama bengkel)/i);
+  c.lastCo   = g(/^(Nama restoran|Sebutkan nama bengkel|Sebutkan p[ae]rkerjaan terakhir)/i);
   c.start    = g(/^(Kapan Anda dapat mulai|Bisa mulai bekerja)/i);
   c.notice   = g(/notice period Anda\?/);
   c.working  = g(/masih bekerja\?/);
@@ -510,12 +510,12 @@ function renderList(){
 function renderAll(){ pruneReq(); renderChips(); renderPanel(); renderList(); }
 
 // ---------- detail ----------
-const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Tanggal Lahir|Posisi Yang Dilamar|Upload CV|Lampirkan CV|Upload sertifikat|Lokasi outlet|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/i;
+const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Tanggal Lahir|Posisi Yang (Dilamar|Anda ingin lamar)|Upload CV|Lampirkan CV|Upload sertifikat|Lokasi outlet|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/i;
 const PRINT_DUP_YN = [/pengalaman kerja yang relevan.*minimal 1 tahun/, /sistem SHIFT/, /Sabtu, Minggu/, /ditempatkan di BSD/,
   /mengikuti interview/, /pernah mendapatkan surat peringatan/, /pernah meninggalkan pekerjaan/, /kendala transportasi/,
   /ditempatkan dimanapun/i, /bertugas di lapangan/i, /memiliki device sendiri/i, /storing di luar kota/i];
 const PRINT_DUP_SHORT = [/^Total pengalaman/, /^Posisi terakhir/, /^Nama restoran/, /masih bekerja/, /notice period Anda\?/, /^Kapan Anda dapat mulai/,
-  /^Berapa lama pengalaman Anda bekerja di Bengkel/i, /^Sebutkan nama bengkel/i, /^Bisa mulai bekerja/i];
+  /^Berapa lama pengalaman Anda bekerja di Bengkel/i, /^Sebutkan nama bengkel/i, /^Sebutkan p[ae]rkerjaan terakhir/i, /^Bisa mulai bekerja/i];
 
 // jawaban berisi link (mis. upload file ke Drive) ditampilkan sebagai tombol "Buka file"
 function valueNode(val){
