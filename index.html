@@ -110,6 +110,9 @@ button{cursor:pointer}
 .stamp{font-size:12px;color:var(--muted)}
 @media (prefers-reduced-motion:no-preference){.sheet{animation:up .18s ease-out}@keyframes up{from{transform:translateY(14px)}to{transform:none}}}
 /* ===== cetak (A4, satu halaman) ===== */
+.file-link{display:inline-block;margin:2px 6px 2px 0;padding:5px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--accent);font-weight:700;text-decoration:none}
+.file-thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.file-thumb{width:100%;max-width:220px;max-height:160px;object-fit:cover;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
 #printArea{display:none}
 #printArea.measuring{display:block;position:fixed;left:-10000px;top:0;width:190mm}
 .pa{--ps:1;font-family:var(--font);color:#000;background:#fff;font-size:calc(10pt*var(--ps));line-height:1.3;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -178,9 +181,16 @@ button{cursor:pointer}
 <div id="printArea" aria-hidden="true"></div>
 
 <script>
-/* ===== PENGATURAN: ubah di sini kalau spreadsheet berganti ===== */
-const SHEET_ID = "1XTu4WvQdqQrjq--urbJHFqLM39W0-GwFiisxY5LOyss";
-const SHEET_GID = "894288944";   // tab "Form Responses 1"
+/* ===== PENGATURAN: satu baris per form/divisi =====
+   key     : kode singkat untuk link notifikasi (jangan diubah setelah dipakai)
+   nama    : nama divisi yang tampil
+   id, gid : ID spreadsheet respons dan gid tab "Form Responses 1" (ada di URL spreadsheet)
+   posDefault : dipakai sebagai posisi bila form tidak punya pertanyaan "Posisi Yang Dilamar"
+   profile : 'resto' atau 'digital' (menentukan pertanyaan syarat dasar) */
+const SOURCES = [
+  { key:'baris',   nama:'Chef & Waiter', id:"1XTu4WvQdqQrjq--urbJHFqLM39W0-GwFiisxY5LOyss", gid:"894288944",  posDefault:'',              profile:'resto' },
+  { key:'digital', nama:'Digital Media', id:"1NxObPuSA33AxAhtbkladVG-SsKatgxnv70YtgbNtBOg", gid:"1685699540", posDefault:'DIGITAL MEDIA', profile:'digital' }
+];
 /* ================================================================ */
 
 // ---------- helpers ----------
@@ -214,19 +224,19 @@ function waLink(raw){
 }
 
 // ---------- data ----------
-let COLS = [];   // [{label, idx}]
 let ROWS = [];   // normalized candidates
 let state = { q:'', pos:'', dom:'', start:'', exp:'', req:new Set(), sort:'new', panel:false };
 
-function loadSheet(){
+let cbCount = 0;
+function loadSheet(src){
   return new Promise((resolve, reject) => {
-    const cb = '__sheetCb' + Date.now();
+    const cb = '__sheetCb' + (++cbCount) + '_' + Date.now();
     const s = document.createElement('script');
     const t = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 20000);
     function cleanup(){ clearTimeout(t); delete window[cb]; s.remove(); }
     window[cb] = res => { cleanup(); resolve(res); };
     s.onerror = () => { cleanup(); reject(new Error('blocked')); };
-    s.src = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID + '/gviz/tq?gid=' + SHEET_GID +
+    s.src = 'https://docs.google.com/spreadsheets/d/' + src.id + '/gviz/tq?gid=' + src.gid +
             '&headers=1&tqx=responseHandler:' + cb + '&_=' + Date.now();
     document.head.append(s);
   });
@@ -238,13 +248,13 @@ function cellText(c){
   return c.v == null ? '' : String(c.v);
 }
 
-function normalize(table){
-  COLS = table.cols.map((c, i) => ({ idx:i, label:(c.label || '').replace(/\s+/g,' ').trim() }));
+function normalize(table, src){
+  const cols = table.cols.map((c, i) => ({ idx:i, label:(c.label || '').replace(/\s+/g,' ').trim() }));
   const out = [];
   table.rows.forEach((r, n) => {
-    const vals = COLS.map((_, i) => cellText(r.c && r.c[i]).trim());
+    const vals = cols.map((_, i) => cellText(r.c && r.c[i]).trim());
     if (!vals.some(Boolean)) return;
-    out.push(buildCandidate(vals, n));
+    out.push(buildCandidate(cols, vals, n, src));
   });
   return out;
 }
@@ -278,21 +288,41 @@ function photoEl(c, w, cls, asLink){
 }
 
 // find columns by label pattern, return the first non-empty value
-function colsMatching(re){ return COLS.filter(c => re.test(c.label)); }
-function firstVal(vals, re){
-  for (const c of colsMatching(re)){ const v = vals[c.idx]; if (v) return clean(v); }
+function colsMatching(cols, re){ return cols.filter(c => re.test(c.label)); }
+function firstVal(cols, vals, re){
+  for (const c of colsMatching(cols, re)){ const v = vals[c.idx]; if (v) return clean(v); }
   return '';
 }
 
-function buildCandidate(vals, n){
-  const g = re => firstVal(vals, re);
-  const c = { n, row: n + 2, vals };   // row = nomor baris di spreadsheet (baris 1 = judul)
+// pertanyaan "syarat dasar" per jenis form
+function checksFor(profile, g){
+  if (profile === 'digital') return [
+    { key:'anywhere', label:'Bersedia ditempatkan di mana pun', v:g(/ditempatkan dimanapun/i), want:'yes', short:'Siap ditempatkan', toggle:'Siap ditempatkan mana pun', core:true },
+    { key:'field',    label:'Bersedia bertugas di lapangan (tim troubleshooting)', v:g(/bertugas di lapangan/i), want:'yes', short:'Siap lapangan', toggle:'Siap tugas lapangan', core:true },
+    { key:'device',   label:'Punya device sendiri untuk pekerjaan digital', v:g(/memiliki device sendiri/i), want:'yes', short:'Punya device', toggle:'Punya device sendiri', core:true },
+  ];
+  return [
+    { key:'exp',   label:'Pengalaman relevan min. 1 tahun', v:g(/pengalaman kerja yang relevan.*minimal 1 tahun/), want:'yes', short:'Pengalaman 1 th+', core:true },
+    { key:'shift', label:'Bersedia sistem shift',           v:g(/sistem SHIFT/), want:'yes', short:'Shift', core:true },
+    { key:'wknd',  label:'Bersedia Sabtu, Minggu, hari libur', v:g(/Sabtu, Minggu/), want:'yes', short:'Weekend', core:true },
+    { key:'bsd',   label:'Bersedia ditempatkan di BSD City', v:g(/ditempatkan di BSD/), want:'yes', short:'BSD', core:true },
+    { key:'trial', label:'Bersedia interview / trial',      v:g(/mengikuti interview/), want:'yes', short:'Trial', core:true },
+    { key:'sp',    label:'Pernah mendapat surat peringatan (SP)', v:g(/^Apakah Anda pernah mendapatkan surat peringatan/), want:'no', short:'Tanpa SP' },
+    { key:'left',  label:'Pernah meninggalkan kerja tanpa notice', v:g(/^Apakah Anda pernah meninggalkan pekerjaan/), want:'no', short:'Tanpa resign mendadak' },
+    { key:'trans', label:'Ada kendala transportasi ke BSD', v:g(/kendala transportasi/), want:'no', short:'Transport aman' },
+  ];
+}
+
+function buildCandidate(cols, vals, n, src){
+  const g = re => firstVal(cols, vals, re);
+  const c = { n, row: n + 2, vals, cols, src: src.key, divName: src.nama };   // row = nomor baris di spreadsheet (baris 1 = judul)
   c.time  = g(/^Timestamp/);
   c.name  = g(/^Nama Lengkap/) || '(tanpa nama)';
-  c.wa    = g(/^Nomor WhatsApp/);
+  c.wa    = g(/^Nomor WhatsApp/i);
   c.email = g(/^Email Aktif/) || g(/^Email Address/);
   c.dom   = g(/^Domisili/);
-  c.pos   = g(/^Posisi Yang Dilamar/);
+  c.dob   = g(/^Tanggal Lahir/i);
+  c.pos   = g(/^Posisi Yang Dilamar/) || src.posDefault;
   c.expTotal = g(/^Total pengalaman Anda (di bidang F&B|bekerja di kitchen)/);
   c.lastPos  = g(/^Posisi terakhir/);
   c.lastCo   = g(/^Nama restoran/);
@@ -301,23 +331,16 @@ function buildCandidate(vals, n){
   c.working  = g(/masih bekerja\?/);
   c.cv   = g(/^Upload CV/);
   c.cert = g(/^Upload sertifikat/);
-  c.photoId = driveId(firstVal(vals, /foto/i));   // kolom "Tambahkan Foto terkini langsung dari Kamera"
+  c.photoId = driveId(g(/foto/i));   // kolom foto selfie / foto terkini dari kamera
   c.ts = parseTime(c.time) || n;
-  c.checks = [
-    { key:'exp',   label:'Pengalaman relevan min. 1 tahun', v:g(/pengalaman kerja yang relevan.*minimal 1 tahun/), want:'yes', short:'Pengalaman 1 th+' },
-    { key:'shift', label:'Bersedia sistem shift',           v:g(/sistem SHIFT/), want:'yes', short:'Shift' },
-    { key:'wknd',  label:'Bersedia Sabtu, Minggu, hari libur', v:g(/Sabtu, Minggu/), want:'yes', short:'Weekend' },
-    { key:'bsd',   label:'Bersedia ditempatkan di BSD City', v:g(/ditempatkan di BSD/), want:'yes', short:'BSD' },
-    { key:'trial', label:'Bersedia interview / trial',      v:g(/mengikuti interview/), want:'yes', short:'Trial' },
-    { key:'sp',    label:'Pernah mendapat surat peringatan (SP)', v:g(/^Apakah Anda pernah mendapatkan surat peringatan/), want:'no', short:'Tanpa SP' },
-    { key:'left',  label:'Pernah meninggalkan kerja tanpa notice', v:g(/^Apakah Anda pernah meninggalkan pekerjaan/), want:'no', short:'Tanpa resign mendadak' },
-    { key:'trans', label:'Ada kendala transportasi ke BSD', v:g(/kendala transportasi/), want:'no', short:'Transport aman' },
-  ];
+  c.checks = checksFor(src.profile, g);
   c.checks.forEach(k => {
     k.ok = k.want === 'yes' ? isYes(k.v) : isNo(k.v);
     k.known = !!k.v;
   });
-  c.score = c.checks.slice(0,5).filter(k => k.ok).length;
+  const core = c.checks.filter(k => k.core);
+  c.score = core.filter(k => k.ok).length;
+  c.scoreMax = core.length;
   c.hay = (c.name + ' ' + digits(c.wa) + ' ' + c.wa + ' ' + c.email + ' ' + c.dom + ' ' + c.lastCo).toLowerCase();
   return c;
 }
@@ -336,6 +359,21 @@ const REQ_TOGGLES = [
   ['exp','Pengalaman 1 th+'],['shift','Siap shift'],['wknd','Siap weekend/libur'],
   ['bsd','Siap di BSD'],['trial','Siap trial'],['sp','Tanpa SP'],['left','Tanpa resign mendadak'],['trans','Tanpa kendala transport']
 ];
+// tombol "Wajib terpenuhi" mengikuti divisi/posisi yang sedang tampil
+function toggleDefs(){
+  const map = new Map();
+  ROWS.filter(c => !state.pos || c.pos.toUpperCase() === state.pos).forEach(c => c.checks.forEach(k => {
+    if (!map.has(k.key)){
+      const std = REQ_TOGGLES.find(x => x[0] === k.key);
+      map.set(k.key, (std && std[1]) || k.toggle || k.short);
+    }
+  }));
+  return [...map];
+}
+function pruneReq(){
+  const valid = new Set(toggleDefs().map(x => x[0]));
+  state.req = new Set([...state.req].filter(k => valid.has(k)));
+}
 function filtered(){
   const q = state.q.trim().toLowerCase();
   const qd = digits(q);
@@ -394,7 +432,7 @@ function renderPanel(){
     h('select',{id,onchange:e=>{state[key]=e.target.value;renderList();renderChips2();}},
       h('option',{value:''},'Semua'),
       items.map(([v,n]) => h('option',{value:v,selected:state[key]===v}, v + ' (' + n + ')'))));
-  const toggles = h('div',{class:'toggles'}, REQ_TOGGLES.map(([k,l]) =>
+  const toggles = h('div',{class:'toggles'}, toggleDefs().map(([k,l]) =>
     h('button',{class:'chip',type:'button','aria-pressed':String(state.req.has(k)),
       onclick:e=>{state.req.has(k)?state.req.delete(k):state.req.add(k);e.currentTarget.setAttribute('aria-pressed',String(state.req.has(k)));renderList();renderChips2();}}, l)));
   host.append(h('div',{class:'panel'},
@@ -411,7 +449,7 @@ function renderPanel(){
 function renderChips2(){ renderChips(); }
 
 function card(c){
-  const flags = c.checks.slice(0,5).map(k => h('span',{class:'pill ' + (k.ok?'ok':(k.known?'bad':'mut'))}, (k.ok?'✓ ':(k.known?'✕ ':'? ')) + k.short));
+  const flags = c.checks.filter(k => k.core).map(k => h('span',{class:'pill ' + (k.ok?'ok':(k.known?'bad':'mut'))}, (k.ok?'✓ ':(k.known?'✕ ':'? ')) + k.short));
   return h('button',{class:'card',type:'button',onclick:()=>openDetail(c)},
     h('div',{class:'card-top'},
       h('div',{class:'who'}, photoEl(c, 96, 'avatar'), h('h2',null,c.name)),
@@ -437,17 +475,45 @@ function renderList(){
   }
   list.forEach(c => host.append(card(c)));
 }
-function renderAll(){ renderChips(); renderPanel(); renderList(); }
+function renderAll(){ pruneReq(); renderChips(); renderPanel(); renderList(); }
 
 // ---------- detail ----------
-const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Posisi Yang Dilamar|Upload CV|Upload sertifikat|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/;
+const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Tanggal Lahir|Posisi Yang Dilamar|Upload CV|Upload sertifikat|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/i;
 const PRINT_DUP_YN = [/pengalaman kerja yang relevan.*minimal 1 tahun/, /sistem SHIFT/, /Sabtu, Minggu/, /ditempatkan di BSD/,
-  /mengikuti interview/, /pernah mendapatkan surat peringatan/, /pernah meninggalkan pekerjaan/, /kendala transportasi/];
+  /mengikuti interview/, /pernah mendapatkan surat peringatan/, /pernah meninggalkan pekerjaan/, /kendala transportasi/,
+  /ditempatkan dimanapun/i, /bertugas di lapangan/i, /memiliki device sendiri/i];
 const PRINT_DUP_SHORT = [/^Total pengalaman/, /^Posisi terakhir/, /^Nama restoran/, /masih bekerja/, /notice period Anda\?/, /^Kapan Anda dapat mulai/];
+
+// jawaban berisi link (mis. upload file ke Drive) ditampilkan sebagai tombol "Buka file"
+function valueNode(val){
+  const parts = String(val).split(/(https?:\/\/[^\s,]+)/);
+  const urls = parts.filter(x => /^https?:\/\//.test(x));
+  const nodes = [];
+  let n = 0;
+  parts.forEach(x => {
+    if (/^https?:\/\//.test(x)){
+      n++;
+      nodes.push(h('a',{class:'file-link',href:x,target:'_blank',rel:'noopener'}, urls.length > 1 ? 'Buka file ' + n : 'Buka file'));
+    } else if (x.trim() && !/^[,\s]+$/.test(x)){
+      nodes.push(x);
+    }
+  });
+  // bila seluruh jawaban hanya link Drive: tampilkan pratinjau gambar (disembunyikan otomatis kalau bukan gambar)
+  const onlyLinks = urls.length && parts.every(x => /^https?:\/\//.test(x) || !x.trim() || /^[,\s]+$/.test(x));
+  if (onlyLinks){
+    const thumbs = urls.map(u => driveId(u)).filter(Boolean).map(id => {
+      const img = h('img',{class:'file-thumb',src:photoSrc(id, 480),alt:'Pratinjau file',loading:'lazy',referrerpolicy:'no-referrer'});
+      img.addEventListener('error', () => img.remove());
+      return img;
+    });
+    if (thumbs.length) nodes.push(h('div',{class:'file-thumbs'}, thumbs));
+  }
+  return nodes;
+}
 
 function splitAnswers(c){
   const yn = [], longs = [], shorts = [];
-  COLS.forEach(col => {
+  c.cols.forEach(col => {
     const v = c.vals[col.idx]; if (!v) return;
     if (SKIP_LABEL.test(col.label)) return;
     const val = clean(v);
@@ -487,24 +553,24 @@ function buildPrint(c){
   const photo = printPhoto(c);
   const row = (l, v) => v ? h('div',{class:'pa-row'}, h('span',{class:'pa-l'}, l), h('span',{class:'pa-v'}, v)) : null;
   const qa = x => h('div',{class:'pa-item'}, h('div',{class:'pa-q'}, x.lbl), h('div',{class:'pa-a'}, x.val));
-  const consent = firstVal(c.vals, /^Pernyataan dan Persetujuan/);
+  const consent = firstVal(c.cols, c.vals, /^Pernyataan dan Persetujuan/);
   const docs = [['CV', links(c.cv)], ['Sertifikat', links(c.cert)]].flatMap(([n, us]) =>
     us.map((u, i) => h('div',{class:'pa-link'}, n + (us.length > 1 ? ' ' + (i+1) : '') + ': ' + u)));
   const el = h('div',{class:'pa'},
     h('div',{class:'pa-head'},
       photo.box,
       h('div',{class:'pa-id'},
-        h('div',{class:'pa-org'}, 'Berjaya Indonesia Group · Data Screening Pelamar'),
+        h('div',{class:'pa-org'}, 'Berjaya Indonesia Group · Data Screening Pelamar · ' + c.divName),
         h('div',{class:'pa-name'}, c.name),
         h('div',{class:'pa-grid'},
           row('Posisi', c.pos), row('Domisili', c.dom),
           row('WhatsApp', c.wa), row('Email', c.email),
-          row('Diisi pada', c.time), row('Syarat dasar', c.score + '/5 terpenuhi')))),
-    h('div',{class:'pa-sec'}, h('h3',null,'Ringkasan pengalaman'),
+          row('Diisi pada', c.time), row('Tanggal lahir', c.dob), row('Syarat dasar', c.score + '/' + c.scoreMax + ' terpenuhi')))),
+    (c.expTotal || c.lastPos || c.lastCo || c.working || c.notice || c.start) ? h('div',{class:'pa-sec'}, h('h3',null,'Ringkasan pengalaman'),
       h('div',{class:'pa-grid'},
         row('Total pengalaman', c.expTotal), row('Posisi terakhir', c.lastPos),
         row('Tempat kerja terakhir', c.lastCo), row('Masih bekerja', c.working),
-        row('Notice period', c.notice), row('Bisa mulai', c.start))),
+        row('Notice period', c.notice), row('Bisa mulai', c.start))) : null,
     h('div',{class:'pa-sec'}, h('h3',null,'Syarat & riwayat'),
       h('div',{class:'pa-checks'}, c.checks.map(k =>
         h('div',{class:'pa-check'},
@@ -526,7 +592,7 @@ function buildPrint(c){
       h('div',{class:'pa-foot'},
         h('span',null,'☐ Lanjut   ☐ Cadangan   ☐ Tidak lanjut'),
         h('span',null,'Pewawancara: ______________________   Tanggal: ____________'))),
-    h('div',{class:'pa-stamp'}, 'Dicetak ' + new Date().toLocaleString('id-ID') + ' · baris spreadsheet ' + c.row));
+    h('div',{class:'pa-stamp'}, 'Dicetak ' + new Date().toLocaleString('id-ID') + ' · ' + c.divName + ' baris ' + c.row));
   return { el, ready: photo.ready };
 }
 
@@ -578,7 +644,7 @@ function openDetail(c, pushed){
           h('div',null,
             h('h2',null,c.name),
             h('div',null, c.pos ? h('span',{class:'pill pos'},c.pos) : null, ' ',
-              h('span',{class:'pill ' + (c.score>=5?'ok':c.score>=3?'warn':'bad')}, 'Syarat dasar ' + c.score + '/5')))),
+              h('span',{class:'pill ' + (c.score>=c.scoreMax?'ok':c.score>=Math.ceil(c.scoreMax*0.6)?'warn':'bad')}, 'Syarat dasar ' + c.score + '/' + c.scoreMax)))),
         h('div',{class:'meta'},
           c.dom ? h('span',null,'📍 ' + c.dom) : null,
           c.wa ? h('span',null,'WA ' + c.wa) : null,
@@ -590,7 +656,7 @@ function openDetail(c, pushed){
           certs.map((u,i) => h('a',{class:'btn',href:u,target:'_blank',rel:'noopener'}, certs.length>1 ? 'Sertifikat ' + (i+1) : 'Sertifikat')))),
       h('div',{class:'box'}, h('h3',null,'Ringkasan'),
         h('dl',{class:'kv'}, [
-          ['Total pengalaman', c.expTotal], ['Posisi terakhir', c.lastPos], ['Tempat kerja terakhir', c.lastCo],
+          ['Divisi', c.divName], ['Tanggal lahir', c.dob], ['Total pengalaman', c.expTotal], ['Posisi terakhir', c.lastPos], ['Tempat kerja terakhir', c.lastCo],
           ['Masih bekerja', c.working], ['Notice period', c.notice], ['Bisa mulai', c.start]
         ].filter(r => r[1]).map(r => [h('dt',null,r[0]), h('dd',null,r[1])]))),
       h('div',{class:'box'}, h('h3',null,'Syarat & riwayat'),
@@ -599,11 +665,11 @@ function openDetail(c, pushed){
             h('span',{class:'mark ' + (!k.known?'u':k.ok?'y':'n')}, !k.known?'?':k.ok?'✓':'✕'),
             h('div',null, k.label, h('div',{class:'stamp'}, k.known ? 'Jawaban: ' + k.v : 'Tidak dijawab')))))),
       longs.length ? h('div',{class:'box'}, h('h3',null,'Jawaban uraian'),
-        h('div',{class:'qa'}, longs.map(x => h('div',null,h('div',{class:'q'},x.lbl),h('div',{class:'a'},x.val))))) : null,
+        h('div',{class:'qa'}, longs.map(x => h('div',null,h('div',{class:'q'},x.lbl),h('div',{class:'a'},valueNode(x.val)))))) : null,
       shorts.length || yn.length ? h('div',{class:'box'}, h('h3',null,'Data lainnya'),
         h('div',{class:'qa'},
-          shorts.map(x => h('div',null,h('div',{class:'q'},x.lbl),h('div',{class:'a'},x.val))),
-          yn.map(x => h('div',null,h('div',{class:'q'},x.lbl),h('div',{class:'a'},x.val))))) : null));
+          shorts.map(x => h('div',null,h('div',{class:'q'},x.lbl),h('div',{class:'a'},valueNode(x.val)))),
+          yn.map(x => h('div',null,h('div',{class:'q'},x.lbl),h('div',{class:'a'},valueNode(x.val)))))) : null));
   host.append(sheet);
   document.body.style.overflow = 'hidden';
   sheet.scrollTop = 0;
@@ -627,25 +693,35 @@ function showError(kind){
   host.append(h('div',{class:'state'},h('strong',null,msg[0]),msg[1]));
   $('#stamp').textContent = 'Gagal memuat';
 }
-// Link dari notifikasi Telegram: halaman#baris-12 langsung membuka detail pelamar di baris 12 spreadsheet.
+// Link dari notifikasi Telegram: halaman#digital-12 langsung membuka detail pelamar di baris 12 spreadsheet divisi itu.
 let hashDone = false;
 function openFromHash(){
   if (hashDone) return;
   hashDone = true;
-  const m = /^#baris-(\d+)$/.exec(location.hash);
+  const m = /^#([a-z0-9]+)-(\d+)$/i.exec(location.hash);
   if (!m) return;
-  const c = ROWS.find(x => x.row === +m[1]);
+  const c = ROWS.find(x => x.src === m[1].toLowerCase() && x.row === +m[2]);
   if (c) openDetail(c);
 }
 async function load(){
   $('#stamp').textContent = 'Memuat data…';
   $('#refresh').disabled = true;
   try{
-    const res = await loadSheet();
-    if (!res || res.status !== 'ok' || !res.table) throw new Error('bad');
-    ROWS = normalize(res.table);
+    const results = await Promise.allSettled(SOURCES.map(async src => {
+      const res = await loadSheet(src);
+      if (!res || res.status !== 'ok' || !res.table) throw new Error('bad');
+      return normalize(res.table, src);
+    }));
+    const failed = [];
+    ROWS = [];
+    results.forEach((r, i) => { if (r.status === 'fulfilled') ROWS.push(...r.value); else failed.push(SOURCES[i].nama); });
+    if (failed.length === SOURCES.length){
+      const why = results[0].reason && results[0].reason.message;
+      throw new Error(why);
+    }
     const t = new Date();
-    $('#stamp').textContent = 'Diperbarui ' + t.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}).replace('.',':');
+    $('#stamp').textContent = 'Diperbarui ' + t.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}).replace('.',':') +
+      (failed.length ? ' \u00b7 gagal memuat: ' + failed.join(', ') : '');
     renderAll();
     openFromHash();
   }catch(err){
