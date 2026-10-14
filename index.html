@@ -161,6 +161,7 @@ button{cursor:pointer}
       <button class="icon-btn" id="refresh" type="button">Muat ulang</button>
     </div>
     <input class="search" id="q" type="search" placeholder="Cari nama, nomor WA, atau email" autocomplete="off" enterkeyhint="search">
+    <div class="chips" id="divChips"></div>
     <div class="chips" id="posChips"></div>
   </div>
 </div>
@@ -186,10 +187,11 @@ button{cursor:pointer}
    nama    : nama divisi yang tampil
    id, gid : ID spreadsheet respons dan gid tab "Form Responses 1" (ada di URL spreadsheet)
    posDefault : dipakai sebagai posisi bila form tidak punya pertanyaan "Posisi Yang Dilamar"
-   profile : 'resto' atau 'digital' (menentukan pertanyaan syarat dasar) */
+   profile : 'resto', 'digital' atau 'bengkel' (menentukan pertanyaan syarat dasar) */
 const SOURCES = [
   { key:'baris',   nama:'Chef & Waiter', id:"1XTu4WvQdqQrjq--urbJHFqLM39W0-GwFiisxY5LOyss", gid:"894288944",  posDefault:'',              profile:'resto' },
-  { key:'digital', nama:'Digital Media', id:"1NxObPuSA33AxAhtbkladVG-SsKatgxnv70YtgbNtBOg", gid:"1685699540", posDefault:'DIGITAL MEDIA', profile:'digital' }
+  { key:'digital', nama:'Digital Media', id:"1NxObPuSA33AxAhtbkladVG-SsKatgxnv70YtgbNtBOg", gid:"1685699540", posDefault:'DIGITAL MEDIA', profile:'digital' },
+  { key:'bengkel', nama:'Bengkel',       id:"1aH042xOl6G8e7SqUpyK9DxhwpjiQyUnxaxC6e4cSj1M", gid:"1549603677", posDefault:'BENGKEL',       profile:'bengkel' }
 ];
 /* ================================================================ */
 
@@ -225,7 +227,7 @@ function waLink(raw){
 
 // ---------- data ----------
 let ROWS = [];   // normalized candidates
-let state = { q:'', pos:'', dom:'', start:'', exp:'', req:new Set(), sort:'new', panel:false };
+let state = { q:'', div:'', pos:'', dom:'', start:'', exp:'', outlet:'', req:new Set(), sort:'new', panel:false };
 
 let cbCount = 0;
 function loadSheet(src){
@@ -296,6 +298,10 @@ function firstVal(cols, vals, re){
 
 // pertanyaan "syarat dasar" per jenis form
 function checksFor(profile, g){
+  if (profile === 'bengkel') return [
+    { key:'anywhere', label:'Bersedia ditempatkan di mana pun', v:g(/ditempatkan dimanapun/i), want:'yes', short:'Siap ditempatkan', toggle:'Siap ditempatkan mana pun', core:true },
+    { key:'storing',  label:'Bersedia storing di luar kota domisili', v:g(/storing di luar kota/i), want:'yes', short:'Siap storing', toggle:'Siap storing luar kota', core:true },
+  ];
   if (profile === 'digital') return [
     { key:'anywhere', label:'Bersedia ditempatkan di mana pun', v:g(/ditempatkan dimanapun/i), want:'yes', short:'Siap ditempatkan', toggle:'Siap ditempatkan mana pun', core:true },
     { key:'field',    label:'Bersedia bertugas di lapangan (tim troubleshooting)', v:g(/bertugas di lapangan/i), want:'yes', short:'Siap lapangan', toggle:'Siap tugas lapangan', core:true },
@@ -322,14 +328,16 @@ function buildCandidate(cols, vals, n, src){
   c.email = g(/^Email Aktif/) || g(/^Email Address/);
   c.dom   = g(/^Domisili/);
   c.dob   = g(/^Tanggal Lahir/i);
-  c.pos   = g(/^Posisi Yang Dilamar/) || src.posDefault;
-  c.expTotal = g(/^Total pengalaman Anda (di bidang F&B|bekerja di kitchen)/);
+  c.outlet = g(/^Lokasi outlet/i);   // bisa lebih dari satu (dipisah koma)
+  c.outletList = c.outlet ? c.outlet.split(/\s*,\s*/).filter(Boolean) : [];
+  c.pos   = g(/^Posisi Yang Dilamar/) || src.posDefault || 'BELUM PILIH POSISI';   // pelamar yang berhenti di pertanyaan dasar belum sempat memilih posisi
+  c.expTotal = g(/^(Total pengalaman Anda (di bidang F&B|bekerja di kitchen)|Berapa lama pengalaman Anda bekerja di Bengkel)/i);
   c.lastPos  = g(/^Posisi terakhir/);
-  c.lastCo   = g(/^Nama restoran/);
-  c.start    = g(/^Kapan Anda dapat mulai/);
+  c.lastCo   = g(/^(Nama restoran|Sebutkan nama bengkel)/i);
+  c.start    = g(/^(Kapan Anda dapat mulai|Bisa mulai bekerja)/i);
   c.notice   = g(/notice period Anda\?/);
   c.working  = g(/masih bekerja\?/);
-  c.cv   = g(/^Upload CV/);
+  c.cv   = g(/^(Upload|Lampirkan) CV/i);
   c.cert = g(/^Upload sertifikat/);
   c.photoId = driveId(g(/foto/i));   // kolom foto selfie / foto terkini dari kamera
   c.ts = parseTime(c.time) || n;
@@ -341,7 +349,7 @@ function buildCandidate(cols, vals, n, src){
   const core = c.checks.filter(k => k.core);
   c.score = core.filter(k => k.ok).length;
   c.scoreMax = core.length;
-  c.hay = (c.name + ' ' + digits(c.wa) + ' ' + c.wa + ' ' + c.email + ' ' + c.dom + ' ' + c.lastCo).toLowerCase();
+  c.hay = (c.name + ' ' + digits(c.wa) + ' ' + c.wa + ' ' + c.email + ' ' + c.dom + ' ' + c.lastCo + ' ' + c.outlet).toLowerCase();
   return c;
 }
 
@@ -362,7 +370,7 @@ const REQ_TOGGLES = [
 // tombol "Wajib terpenuhi" mengikuti divisi/posisi yang sedang tampil
 function toggleDefs(){
   const map = new Map();
-  ROWS.filter(c => !state.pos || c.pos.toUpperCase() === state.pos).forEach(c => c.checks.forEach(k => {
+  ROWS.filter(c => (!state.div || c.src === state.div) && (!state.pos || c.pos.toUpperCase() === state.pos)).forEach(c => c.checks.forEach(k => {
     if (!map.has(k.key)){
       const std = REQ_TOGGLES.find(x => x[0] === k.key);
       map.set(k.key, (std && std[1]) || k.toggle || k.short);
@@ -380,10 +388,12 @@ function filtered(){
   const dom = state.dom.trim().toLowerCase();
   let list = ROWS.filter(c => {
     if (q && !(c.hay.includes(q) || (qd.length>=4 && c.hay.includes(qd)))) return false;
+    if (state.div && c.src !== state.div) return false;
     if (state.pos && c.pos.toUpperCase() !== state.pos) return false;
     if (dom && !c.dom.toLowerCase().includes(dom)) return false;
     if (state.start && c.start !== state.start) return false;
     if (state.exp && c.expTotal !== state.exp) return false;
+    if (state.outlet && !c.outletList.includes(state.outlet)) return false;
     for (const key of state.req){
       const k = c.checks.find(x => x.key === key);
       if (!k || !k.ok) return false;
@@ -399,7 +409,7 @@ function filtered(){
   return list;
 }
 function activeFilterCount(){
-  return (state.dom?1:0)+(state.start?1:0)+(state.exp?1:0)+state.req.size;
+  return (state.dom?1:0)+(state.start?1:0)+(state.exp?1:0)+(state.outlet?1:0)+state.req.size;
 }
 
 // ---------- render ----------
@@ -410,14 +420,34 @@ function distinct(fn){
 }
 
 function renderChips(){
+  // baris 1: divisi (semua pelamar tetap tampil di divisinya, lolos pertanyaan dasar atau tidak)
+  const dh = $('#divChips'); dh.replaceChildren();
+  const mkd = (label, val) => h('button',{class:'chip',type:'button','aria-pressed':String(state.div===val),
+    onclick:()=>{state.div=val;state.pos='';state.outlet='';renderAll();}}, label);
+  dh.append(mkd('Semua divisi (' + ROWS.length + ')', ''));
+  SOURCES.forEach(src => dh.append(mkd(src.nama + ' (' + ROWS.filter(c => c.src === src.key).length + ')', src.key)));
+
+  // baris 2: posisi di dalam divisi yang dipilih
   const host = $('#posChips'); host.replaceChildren();
-  const poss = distinct(c => c.pos.toUpperCase());
+  const m = new Map();
+  ROWS.filter(c => !state.div || c.src === state.div).forEach(c => {
+    const v = c.pos.toUpperCase(); if (v) m.set(v, (m.get(v) || 0) + 1);
+  });
+  const poss = [...m.entries()].sort((a,b) => b[1]-a[1]);
   const mk = (label, val) => h('button',{class:'chip',type:'button','aria-pressed':String(state.pos===val),onclick:()=>{state.pos=val;renderAll();}}, label);
-  host.append(mk('Semua posisi',''));
-  poss.forEach(([p,n]) => host.append(mk(p + ' (' + n + ')', p)));
+  if (!state.div || poss.length > 1){
+    host.append(mk('Semua posisi',''));
+    poss.forEach(([p,n]) => host.append(mk(p + ' (' + n + ')', p)));
+  }
   const nf = activeFilterCount();
   host.append(h('button',{class:'chip more',type:'button','aria-pressed':String(state.panel),'aria-expanded':String(state.panel),
     onclick:()=>{state.panel=!state.panel;renderPanel();renderChips();}}, nf ? 'Filter lain (' + nf + ')' : 'Filter lain'));
+}
+
+function outletItems(){
+  const m = new Map();
+  ROWS.filter(c => !state.div || c.src === state.div).forEach(c => c.outletList.forEach(o => m.set(o, (m.get(o) || 0) + 1)));
+  return [...m.entries()].sort((a,b) => b[1]-a[1]);
 }
 
 function renderPanel(){
@@ -440,9 +470,10 @@ function renderPanel(){
     h('div',{class:'row2'},
       sel('start','Bisa mulai kerja','start',distinct(c=>c.start)),
       sel('exp','Total pengalaman','exp',distinct(c=>c.expTotal))),
+    outletItems().length ? sel('outlet','Lokasi outlet yang diinginkan','outlet',outletItems()) : null,
     h('div',null,h('h3',null,'Wajib terpenuhi'),toggles),
     h('div',{class:'panel-foot'},
-      h('button',{class:'link-btn',type:'button',onclick:()=>{state.dom='';state.start='';state.exp='';state.req.clear();renderAll();}},'Reset filter'),
+      h('button',{class:'link-btn',type:'button',onclick:()=>{state.dom='';state.start='';state.exp='';state.outlet='';state.req.clear();renderAll();}},'Reset filter'),
       h('button',{class:'icon-btn',type:'button',onclick:()=>{state.panel=false;renderPanel();renderChips();}},'Tutup'))));
 }
 // update only the chip row label (avoid re-creating inputs while typing)
@@ -456,6 +487,7 @@ function card(c){
       c.pos ? h('span',{class:'pill pos'},c.pos) : null),
     h('div',{class:'meta'},
       c.dom ? h('span',null,'📍 ' + c.dom) : null,
+      c.outlet ? h('span',null,'Outlet: ' + c.outlet) : null,
       c.expTotal ? h('span',null,'Pengalaman ' + c.expTotal) : null,
       c.start ? h('span',null,'Mulai: ' + c.start) : null),
     h('div',{class:'card-foot'}, flags));
@@ -478,11 +510,12 @@ function renderList(){
 function renderAll(){ pruneReq(); renderChips(); renderPanel(); renderList(); }
 
 // ---------- detail ----------
-const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Tanggal Lahir|Posisi Yang Dilamar|Upload CV|Upload sertifikat|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/i;
+const SKIP_LABEL = /^(Timestamp|Email Address|Nama Lengkap|Nomor WhatsApp|Email Aktif|Domisili|Tanggal Lahir|Posisi Yang Dilamar|Upload CV|Lampirkan CV|Upload sertifikat|Lokasi outlet|Tambahkan Foto|Pernyataan dan Persetujuan|Column \d+)/i;
 const PRINT_DUP_YN = [/pengalaman kerja yang relevan.*minimal 1 tahun/, /sistem SHIFT/, /Sabtu, Minggu/, /ditempatkan di BSD/,
   /mengikuti interview/, /pernah mendapatkan surat peringatan/, /pernah meninggalkan pekerjaan/, /kendala transportasi/,
-  /ditempatkan dimanapun/i, /bertugas di lapangan/i, /memiliki device sendiri/i];
-const PRINT_DUP_SHORT = [/^Total pengalaman/, /^Posisi terakhir/, /^Nama restoran/, /masih bekerja/, /notice period Anda\?/, /^Kapan Anda dapat mulai/];
+  /ditempatkan dimanapun/i, /bertugas di lapangan/i, /memiliki device sendiri/i, /storing di luar kota/i];
+const PRINT_DUP_SHORT = [/^Total pengalaman/, /^Posisi terakhir/, /^Nama restoran/, /masih bekerja/, /notice period Anda\?/, /^Kapan Anda dapat mulai/,
+  /^Berapa lama pengalaman Anda bekerja di Bengkel/i, /^Sebutkan nama bengkel/i, /^Bisa mulai bekerja/i];
 
 // jawaban berisi link (mis. upload file ke Drive) ditampilkan sebagai tombol "Buka file"
 function valueNode(val){
@@ -518,7 +551,7 @@ function splitAnswers(c){
     if (SKIP_LABEL.test(col.label)) return;
     const val = clean(v);
     const lbl = col.label.replace(/^\d+\.\s*/,'').replace(/\s*Jawaban singkat\s*$/i,'').replace(/\s*Jika YA:.*$/is,'').trim();
-    if (/^Apakah|^Pernah/.test(lbl) && (isYes(val) || isNo(val)) && val.length < 40) yn.push({lbl, val, yes:isYes(val)});
+    if (/^Apa(kah)?\s|^Pernah/.test(lbl) && (isYes(val) || isNo(val)) && val.length < 40) yn.push({lbl, val, yes:isYes(val)});
     else if (val.length > 45 || lbl.length > 60) longs.push({lbl, val});
     else shorts.push({lbl, val});
   });
@@ -547,7 +580,7 @@ function printPhoto(c){
 function buildPrint(c){
   const links = v => (v || '').split(/[,\s]+/).filter(u => /^https?:\/\//.test(u));
   const all = splitAnswers(c);
-  const longs = all.longs;
+  const longs = all.longs.filter(x => !PRINT_DUP_SHORT.some(re => re.test(x.lbl)));
   const shorts = all.shorts.filter(x => !PRINT_DUP_SHORT.some(re => re.test(x.lbl)));
   const yn = all.yn.filter(x => !PRINT_DUP_YN.some(re => re.test(x.lbl)));
   const photo = printPhoto(c);
@@ -566,9 +599,9 @@ function buildPrint(c){
           row('Posisi', c.pos), row('Domisili', c.dom),
           row('WhatsApp', c.wa), row('Email', c.email),
           row('Diisi pada', c.time), row('Tanggal lahir', c.dob), row('Syarat dasar', c.score + '/' + c.scoreMax + ' terpenuhi')))),
-    (c.expTotal || c.lastPos || c.lastCo || c.working || c.notice || c.start) ? h('div',{class:'pa-sec'}, h('h3',null,'Ringkasan pengalaman'),
+    (c.outlet || c.expTotal || c.lastPos || c.lastCo || c.working || c.notice || c.start) ? h('div',{class:'pa-sec'}, h('h3',null,'Ringkasan pengalaman'),
       h('div',{class:'pa-grid'},
-        row('Total pengalaman', c.expTotal), row('Posisi terakhir', c.lastPos),
+        row('Lokasi outlet', c.outlet), row('Total pengalaman', c.expTotal), row('Posisi terakhir', c.lastPos),
         row('Tempat kerja terakhir', c.lastCo), row('Masih bekerja', c.working),
         row('Notice period', c.notice), row('Bisa mulai', c.start))) : null,
     h('div',{class:'pa-sec'}, h('h3',null,'Syarat & riwayat'),
@@ -656,7 +689,7 @@ function openDetail(c, pushed){
           certs.map((u,i) => h('a',{class:'btn',href:u,target:'_blank',rel:'noopener'}, certs.length>1 ? 'Sertifikat ' + (i+1) : 'Sertifikat')))),
       h('div',{class:'box'}, h('h3',null,'Ringkasan'),
         h('dl',{class:'kv'}, [
-          ['Divisi', c.divName], ['Tanggal lahir', c.dob], ['Total pengalaman', c.expTotal], ['Posisi terakhir', c.lastPos], ['Tempat kerja terakhir', c.lastCo],
+          ['Divisi', c.divName], ['Tanggal lahir', c.dob], ['Lokasi outlet', c.outlet], ['Total pengalaman', c.expTotal], ['Posisi terakhir', c.lastPos], ['Tempat kerja terakhir', c.lastCo],
           ['Masih bekerja', c.working], ['Notice period', c.notice], ['Bisa mulai', c.start]
         ].filter(r => r[1]).map(r => [h('dt',null,r[0]), h('dd',null,r[1])]))),
       h('div',{class:'box'}, h('h3',null,'Syarat & riwayat'),
