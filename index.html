@@ -658,6 +658,27 @@ async function printCandidate(c){
   }
 }
 
+function candLink(c){
+  return location.href.replace(/#.*$/,'') + '#' + c.src + '-' + c.row;
+}
+async function copyLink(c, btn){
+  const url = candLink(c);
+  let ok = false;
+  try { await navigator.clipboard.writeText(url); ok = true; } catch(e){}
+  if (!ok){
+    try {
+      const t = document.createElement('textarea');
+      t.value = url; t.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+      document.body.appendChild(t); t.focus(); t.select();
+      ok = document.execCommand('copy'); t.remove();
+    } catch(e){}
+  }
+  if (!ok){ window.prompt('Salin link ini:', url); return; }
+  const old = btn.textContent;
+  btn.textContent = 'Tersalin ✓';
+  setTimeout(()=>{ btn.textContent = old; }, 1800);
+}
+
 function openDetail(c, pushed){
   const host = $('#sheetHost'); host.replaceChildren();
   const wa = waLink(c.wa);
@@ -685,6 +706,7 @@ function openDetail(c, pushed){
         h('div',{class:'actions'},
           wa ? h('a',{class:'btn primary',href:wa,target:'_blank',rel:'noopener'},'Chat WhatsApp') : null,
           h('button',{class:'btn',type:'button',onclick:()=>printCandidate(c)},'Cetak'),
+          h('button',{class:'btn',type:'button',onclick:e=>copyLink(c,e.currentTarget)},'Salin link'),
           cvs.map((u,i) => h('a',{class:'btn',href:u,target:'_blank',rel:'noopener'}, cvs.length>1 ? 'Buka CV ' + (i+1) : 'Buka CV')),
           certs.map((u,i) => h('a',{class:'btn',href:u,target:'_blank',rel:'noopener'}, certs.length>1 ? 'Sertifikat ' + (i+1) : 'Sertifikat')))),
       h('div',{class:'box'}, h('h3',null,'Ringkasan'),
